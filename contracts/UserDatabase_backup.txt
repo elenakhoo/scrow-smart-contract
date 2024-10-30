@@ -1,0 +1,153 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.27;
+
+contract UserDatabase_ {
+    // Mapping of wallet addresses to shipping addresses
+    mapping(address => string) private shippingAddresses;
+
+    // Event to log address updates
+    event ShippingAddressUpdated(address indexed user, string shippingAddress);
+
+    // Function to set or update a shipping address for the sender's wallet
+    function setShippingAddress(string memory _shippingAddress) public {
+        shippingAddresses[msg.sender] = _shippingAddress;
+        emit ShippingAddressUpdated(msg.sender, _shippingAddress);
+    }
+
+    // Function to get the shipping address of the sender's wallet
+    function getShippingAddress(address _user) public view returns (string memory) {
+        return shippingAddresses[_user];
+    }
+
+    // Function to check if the user has set a shipping address
+    function hasShippingAddress(address _user) public view returns (bool) {
+        bytes memory tempAddress = bytes(shippingAddresses[_user]); // Get the shipping address
+        return tempAddress.length > 0; // Return true if the shipping address is not empty
+    }
+}
+
+
+
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.27;
+
+contract UserDatabase {
+    // Mapping of wallet addresses to shipping addresses
+    mapping(address => string) private shippingAddresses;
+
+    // Struct to represent a product
+    struct Product {
+        uint id;
+        string name;
+        uint price;
+        string description;
+        bool available;
+    }
+
+    // Mapping from seller address to their list of products
+    mapping(address => Product[]) private sellerProducts;
+
+    // Mapping to track individual product ownership by ID for each seller
+    mapping(uint => address) private productOwners;
+
+    // Counter for generating unique product IDs
+    uint private productIdCounter;
+
+    // Events
+    event ShippingAddressUpdated(address indexed user, string shippingAddress);
+    event ProductAdded(address indexed seller, uint productId, string productName, uint price);
+    event ProductUpdated(address indexed seller, uint productId, bool available);
+    event ProductDeleted(address indexed seller, uint productId);
+
+    // Modifier to restrict actions to the owner of a specific product
+    modifier onlyProductOwner(uint _productId) {
+        require(productOwners[_productId] == msg.sender, "Not authorized to manage this product");
+        _;
+    }
+
+    // Function to set or update a shipping address for the sender's wallet
+    function setShippingAddress(string memory _shippingAddress) public {
+        shippingAddresses[msg.sender] = _shippingAddress;
+        emit ShippingAddressUpdated(msg.sender, _shippingAddress);
+    }
+
+    // Function to get the shipping address of a user
+    function getShippingAddress(address _user) public view returns (string memory) {
+        return shippingAddresses[_user];
+    }
+
+    // Function to check if the user has set a shipping address
+    function hasShippingAddress(address _user) public view returns (bool) {
+        return bytes(shippingAddresses[_user]).length > 0;
+    }
+
+    // Function to add a product for a seller
+    function addProduct(string memory _name, uint _price, string memory _description) public {
+        Product memory newProduct = Product({
+            id: productIdCounter,
+            name: _name,
+            price: _price,
+            description: _description,
+            available: true
+        });
+
+        sellerProducts[msg.sender].push(newProduct);
+        productOwners[productIdCounter] = msg.sender; // Set ownership of product ID
+        emit ProductAdded(msg.sender, productIdCounter, _name, _price);
+
+        productIdCounter++; // Increment the product ID counter for the next product
+    }
+
+
+    // Function to retrieve all products for a specific seller
+    function getSellerProducts(address _seller) public view returns (Product[] memory) {
+        return sellerProducts[_seller];
+    }
+
+    // Function to retrieve a single product by ID for a seller
+    function getProductById(uint _productId) public view returns (Product memory) {
+        address owner = productOwners[_productId];
+        require(owner != address(0), "Product does not exist");
+
+        Product[] storage products = sellerProducts[owner];
+        for (uint i = 0; i < products.length; i++) {
+            if (products[i].id == _productId) {
+                return products[i];
+            }
+        }
+        revert("Product not found");
+    }
+
+    // Function to update the availability of a product
+    function updateProductAvailability(uint _productId, bool _available) public onlyProductOwner(_productId) {
+        Product[] storage products = sellerProducts[msg.sender];
+
+        for (uint i = 0; i < products.length; i++) {
+            if (products[i].id == _productId) {
+                products[i].available = _available;
+                emit ProductUpdated(msg.sender, _productId, _available);
+                return;
+            }
+        }
+        revert("Product not found");
+    }
+
+    // Function to delete a product for a seller
+    function deleteProduct(uint _productId) public onlyProductOwner(_productId) {
+        Product[] storage products = sellerProducts[msg.sender];
+
+        for (uint i = 0; i < products.length; i++) {
+            if (products[i].id == _productId) {
+                // Remove the product by swapping it with the last product and then popping it
+                products[i] = products[products.length - 1];
+                products.pop();
+                
+                // Remove product ownership and emit event
+                delete productOwners[_productId];
+                emit ProductDeleted(msg.sender, _productId);
+                return;
+            }
+        }
+        revert("Product not found");
+    }
+}
