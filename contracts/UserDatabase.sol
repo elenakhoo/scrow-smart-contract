@@ -46,12 +46,12 @@ contract UserDatabase {
         shippingAddresses[predefinedAddress] = "123 Blockchain Lane, Crypto City";
 
         // Add predefined products
-        addInitialProduct(predefinedAddress, "Product 1", 100, "Description of product 1");
-        addInitialProduct(predefinedAddress, "Product 2", 150, "Description of product 2");
-        addInitialProduct(predefinedAddress, "Product 3", 200, "Description of product 3");
-        addInitialProduct(predefinedAddress, "Product 4", 100, "Description of product 4");
-        addInitialProduct(predefinedAddress, "Product 5", 150, "Description of product 5");
-        addInitialProduct(predefinedAddress, "Product 6", 200, "Description of product 6");
+        addInitialProduct(predefinedAddress, "Product 1", 0.01 * 10 ** 18, "Description of product 1");
+        addInitialProduct(predefinedAddress, "Product 2", 0.02 * 10 ** 18, "Description of product 2");
+        addInitialProduct(predefinedAddress, "Product 3", 0.01 * 10 ** 18, "Description of product 3");
+        addInitialProduct(predefinedAddress, "Product 4", 0.014 * 10 ** 18, "Description of product 4");
+        addInitialProduct(predefinedAddress, "Product 5", 0.005 * 10 ** 18, "Description of product 5");
+        addInitialProduct(predefinedAddress, "Product 6", 0.01 * 10 ** 18, "Description of product 6");
     }
 
     // Internal function to add predefined products during contract initialization
@@ -65,17 +65,15 @@ contract UserDatabase {
         });
 
         if (sellerProducts[seller].length == 0) {
-            sellers.push(seller); // Add to sellers list if it's the first product for the seller
+            sellers.push(seller);
         }
 
         sellerProducts[seller].push(newProduct);
-        productOwners[productIdCounter] = seller; // Set ownership of the product
+        productOwners[productIdCounter] = seller;
         emit ProductAdded(seller, productIdCounter, name, price);
 
-        productIdCounter++; // Increment the product ID counter for the next product
+        productIdCounter++;
     }
-
-    // Other functions remain unchanged
 
     // Function to set or update a shipping address for the sender's wallet
     function setShippingAddress(string memory _shippingAddress) public {
@@ -176,5 +174,145 @@ contract UserDatabase {
         }
 
         return allProducts;
+    }
+
+    // Struct to represent an individual item in an order
+    struct OrderItem {
+        uint productId;
+        uint quantity;
+    }
+
+    // Struct to represent an order with multiple items
+    struct Order {
+        uint orderId;
+        OrderItem[] items; // Array of items in the order
+        address buyer;
+        uint totalPrice;
+        bool isFulfilled;
+        bool isAccepted;
+    }
+
+    mapping(uint => Order) public orders;
+    uint private orderIdCounter;
+
+    event OrderPlaced(uint orderId, address buyer, uint totalPrice);
+    event OrderFulfilled(uint orderId);
+    event OrderAccepted(uint orderId);
+    event OrderDebug(uint indexed orderId, uint productId, uint quantity, uint price, uint totalPrice);
+
+    function placeOrder(OrderItem[] memory _items) public payable {
+        uint totalPrice = 0;
+
+        for (uint i = 0; i < _items.length; i++) {
+            uint productId = _items[i].productId;
+            uint quantity = _items[i].quantity;
+
+            Product memory product = getProductById(productId);
+            require(product.available, "Product not available");
+            totalPrice += product.price * quantity;
+
+            emit OrderDebug(orderIdCounter, productId, quantity, product.price, totalPrice);
+        }
+
+        require(msg.value == totalPrice, "Incorrect payment amount");
+
+        Order storage newOrder = orders[orderIdCounter];
+        newOrder.orderId = orderIdCounter;
+        newOrder.buyer = msg.sender;
+        newOrder.totalPrice = totalPrice;
+        newOrder.isFulfilled = false;
+        newOrder.isAccepted = false;
+
+        for (uint i = 0; i < _items.length; i++) {
+            newOrder.items.push(_items[i]);
+        }
+
+        emit OrderPlaced(orderIdCounter, msg.sender, totalPrice);
+        orderIdCounter++;
+    }
+
+
+    function fulfillOrder(uint _orderId) public {
+        Order storage order = orders[_orderId];
+        require(!order.isFulfilled, "Order already fulfilled");
+
+        for (uint i = 0; i < order.items.length; i++) {
+            uint productId = order.items[i].productId;
+            require(productOwners[productId] == msg.sender, "Not authorized to fulfill this order");
+        }
+
+        order.isFulfilled = true;
+        emit OrderFulfilled(_orderId);
+    }
+
+    function acceptOrder(uint _orderId) public {
+        Order storage order = orders[_orderId];
+        require(msg.sender == order.buyer, "Only buyer can accept the order");
+        require(order.isFulfilled, "Order not fulfilled");
+        require(!order.isAccepted, "Order already accepted");
+
+        order.isAccepted = true;
+
+        for (uint i = 0; i < order.items.length; i++) {
+            uint productId = order.items[i].productId;
+            address seller = productOwners[productId];
+            uint itemPrice = getProductById(productId).price * order.items[i].quantity;
+            payable(seller).transfer(itemPrice);
+        }
+
+        emit OrderAccepted(_orderId);
+    }
+
+    function getOrdersBySeller(address _seller) public view returns (Order[] memory) {
+        uint count = 0;
+        for (uint i = 0; i < orderIdCounter; i++) {
+            for (uint j = 0; j < orders[i].items.length; j++) {
+                if (productOwners[orders[i].items[j].productId] == _seller) {
+                    count++;
+                    break;
+                }
+            }
+        }
+
+        Order[] memory sellerOrders = new Order[](count);
+        uint index = 0;
+
+        for (uint i = 0; i < orderIdCounter; i++) {
+            for (uint j = 0; j < orders[i].items.length; j++) {
+                if (productOwners[orders[i].items[j].productId] == _seller) {
+                    sellerOrders[index] = orders[i];
+                    index++;
+                    break;
+                }
+            }
+        }
+
+        return sellerOrders;
+    }
+
+    // Function to get all orders made by a specific buyer
+    function getOrdersByBuyer(address _buyer) public view returns (Order[] memory) {
+        uint count = 0;
+
+        // Count the number of orders for the buyer
+        for (uint i = 0; i < orderIdCounter; i++) {
+            if (orders[i].buyer == _buyer) {
+                count++;
+            }
+        }
+
+        // Create an array to store the buyer's orders
+        Order[] memory buyerOrders = new Order[](count);
+        uint index = 0;
+
+        // Populate the array with the buyer's orders
+        for (uint i = 0; i < orderIdCounter; i++) {
+            if (orders[i].buyer == _buyer) {
+                buyerOrders[index] = orders[i];
+                index++;
+            }
+        }
+
+        return buyerOrders;
     }
 }
